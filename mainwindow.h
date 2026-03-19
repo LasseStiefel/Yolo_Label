@@ -71,6 +71,13 @@ private slots:
 
 private:
     void updateUsageTimerLabel();
+    bool isCalibrationLabelIndex(int labelIndex) const;
+    QVector<ObjectLabelingBox> loadLabelBoxes(const QString& labelFilePath) const;
+    void writeLabelBoxes(const QString& labelFilePath, const QVector<ObjectLabelingBox>& boxes) const;
+    QVector<ObjectLabelingBox> filterCalibrationBoxes(const QVector<ObjectLabelingBox>& boxes) const;
+    bool boxListsMatchForStorage(const QVector<ObjectLabelingBox>& lhs,
+                                 const QVector<ObjectLabelingBox>& rhs) const;
+    void syncCalibrationBoxesAcrossFolderIfNeeded();
 
     void            init();
     void            init_table_widget();
@@ -129,6 +136,7 @@ private:
     QStringList     m_objList;
     int             m_objIndex;
     int             m_lastLabeledImgIndex;
+    QVector<ObjectLabelingBox> m_savedCalibrationBoxes;
 
     QVector<ObjectLabelingBox> m_copiedAnnotations;
 

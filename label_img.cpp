@@ -149,6 +149,7 @@ void label_img::mousePressEvent(QMouseEvent *ev)
             {
                 saveState();
                 m_objBoundingBoxes.push_back(objBoundingbox);
+                emit annotationsChanged();
             }
 
             releaseMouse();
@@ -163,6 +164,8 @@ void label_img::mousePressEvent(QMouseEvent *ev)
 
 void label_img::mouseReleaseEvent(QMouseEvent *ev)
 {
+    bool finishedDrag = false;
+
     if(m_bPanning && (ev->button() == Qt::MiddleButton || ev->button() == Qt::LeftButton))
     {
         m_bPanning = false;
@@ -173,6 +176,8 @@ void label_img::mouseReleaseEvent(QMouseEvent *ev)
     }
     else if(ev->button() == Qt::LeftButton)
     {
+        finishedDrag = m_bDragging;
+
         if(m_bDragPending && !m_bDragging)
         {
             // Click on box without dragging -> start labeling from that point
@@ -189,6 +194,10 @@ void label_img::mouseReleaseEvent(QMouseEvent *ev)
         else
             setCursor(Qt::CrossCursor);
     }
+
+    if(finishedDrag)
+        emit annotationsChanged();
+
     emit Mouse_Release();
 }
 
@@ -505,6 +514,7 @@ bool label_img::removeFocusedObjectBox(QPointF point)
     {
         saveState();
         m_objBoundingBoxes.removeAt(removeBoxIdx);
+        emit annotationsChanged();
         return true;
     }
     return false;
@@ -513,7 +523,10 @@ bool label_img::removeFocusedObjectBox(QPointF point)
 void label_img::clearAllBoxes()
 {
     saveState();
+    bool hadBoxes = !m_objBoundingBoxes.isEmpty();
     m_objBoundingBoxes.clear();
+    if(hadBoxes)
+        emit annotationsChanged();
 }
 
 void label_img::saveState()
@@ -530,6 +543,7 @@ bool label_img::undo()
         return false;
     m_redoHistory.append(m_objBoundingBoxes);
     m_objBoundingBoxes = m_undoHistory.takeLast();
+    emit annotationsChanged();
     return true;
 }
 
@@ -539,6 +553,7 @@ bool label_img::redo()
         return false;
     m_undoHistory.append(m_objBoundingBoxes);
     m_objBoundingBoxes = m_redoHistory.takeLast();
+    emit annotationsChanged();
     return true;
 }
 
@@ -584,6 +599,7 @@ void label_img::moveBox(int boxIdx, double dx, double dy)
     box.moveLeft(newX);
     box.moveTop(newY);
     showImage();
+    emit annotationsChanged();
 }
 
 void label_img::resizeBox(int boxIdx, double dw, double dh)
@@ -606,6 +622,7 @@ void label_img::resizeBox(int boxIdx, double dw, double dh)
     box.setWidth(newW);
     box.setHeight(newH);
     showImage();
+    emit annotationsChanged();
 }
 
 void label_img::setFocusedObjectBoxLabel(QPointF point, int newLabel)
@@ -614,8 +631,12 @@ void label_img::setFocusedObjectBoxLabel(QPointF point, int newLabel)
 
     if(boxIdx != -1 && newLabel >= 0 && newLabel < m_objList.size())
     {
+        if(m_objBoundingBoxes[boxIdx].label == newLabel)
+            return;
+
         saveState();
         m_objBoundingBoxes[boxIdx].label = newLabel;
+        emit annotationsChanged();
     }
 }
 

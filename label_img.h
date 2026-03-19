@@ -76,6 +76,7 @@ public:
 
 
 signals:
+    void annotationsChanged();
     void Mouse_Moved();
     void Mouse_Pressed();
     void Mouse_Release();

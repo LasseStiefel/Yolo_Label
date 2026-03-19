@@ -22,6 +22,15 @@ using std::ofstream;
 using std::ifstream;
 using std::string;
 
+namespace {
+constexpr qint64 kStoredCoordinateScale = 1000000;
+
+qint64 quantizeForStorage(double value)
+{
+    return static_cast<qint64>(std::llround(value * static_cast<double>(kStoredCoordinateScale)));
+}
+}
+
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent),
     ui(new Ui::MainWindow)
@@ -41,6 +50,7 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_C), this), &QShortcut::activated, this, &MainWindow::copy_annotations);
     connect(new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_V), this), &QShortcut::activated, this, &MainWindow::paste_annotations);
     connect(new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_0), this), &QShortcut::activated, this, &MainWindow::reset_zoom);
+    connect(ui->label_image, &label_img::annotationsChanged, this, &MainWindow::syncCalibrationBoxesAcrossFolderIfNeeded);
 
     ui->checkBox_visualize_class_name->setStyleSheet(
         "QCheckBox { color: rgb(0, 255, 255); }"
@@ -283,6 +293,7 @@ void MainWindow::on_pushButton_open_files_clicked()
 void MainWindow::init()
 {
     m_lastLabeledImgIndex = -1;
+    m_savedCalibrationBoxes.clear();
 
     ui->label_image->init();
 
@@ -386,6 +397,8 @@ void MainWindow::goto_img(const int fileIndex)
     ui->label_image->clearUndoHistory();
     ui->label_image->loadLabelData(get_labeling_data(m_imgList.at(m_imgIndex)));
     ui->label_image->showImage();
+    m_savedCalibrationBoxes = filterCalibrationBoxes(
+        ui->label_image->m_objBoundingBoxes);
 
     set_label_progress(m_imgIndex);
     set_focused_file(m_imgIndex);
@@ -414,33 +427,18 @@ void MainWindow::save_label_data()
 {
     if(m_imgList.size() == 0) return;
 
-    QString qstrOutputLabelData = get_labeling_data(m_imgList.at(m_imgIndex));
-    ofstream fileOutputLabelData(qPrintable(qstrOutputLabelData));
+    const QVector<ObjectLabelingBox> currentCalibrationBoxes = filterCalibrationBoxes(
+        ui->label_image->m_objBoundingBoxes);
 
-    if(fileOutputLabelData.is_open())
+    if(!boxListsMatchForStorage(currentCalibrationBoxes, m_savedCalibrationBoxes))
     {
-        for(int i = 0; i < ui->label_image->m_objBoundingBoxes.size(); i++)
-        {
-            ObjectLabelingBox objBox = ui->label_image->m_objBoundingBoxes[i];
-
-            double midX     = objBox.box.x() + objBox.box.width() / 2.;
-            double midY     = objBox.box.y() + objBox.box.height() / 2.;
-            double width    = objBox.box.width();
-            double height   = objBox.box.height();
-
-            fileOutputLabelData << objBox.label;
-            fileOutputLabelData << " ";
-            fileOutputLabelData << std::fixed << std::setprecision(6) << midX;
-            fileOutputLabelData << " ";
-            fileOutputLabelData << std::fixed << std::setprecision(6) << midY;
-            fileOutputLabelData << " ";
-            fileOutputLabelData << std::fixed << std::setprecision(6) << width;
-            fileOutputLabelData << " ";
-            fileOutputLabelData << std::fixed << std::setprecision(6) << height << std::endl;
-        }
-        m_lastLabeledImgIndex = m_imgIndex;
-        fileOutputLabelData.close();
+        syncCalibrationBoxesAcrossFolderIfNeeded();
+        return;
     }
+
+    writeLabelBoxes(get_labeling_data(m_imgList.at(m_imgIndex)), ui->label_image->m_objBoundingBoxes);
+    m_lastLabeledImgIndex = m_imgIndex;
+    m_savedCalibrationBoxes = currentCalibrationBoxes;
 }
 
 void MainWindow::clear_label_data()
@@ -818,6 +816,7 @@ void MainWindow::paste_annotations()
     ui->label_image->saveState();
     ui->label_image->m_objBoundingBoxes = m_copiedAnnotations;
     ui->label_image->showImage();
+    syncCalibrationBoxesAcrossFolderIfNeeded();
 }
 
 void MainWindow::undo()
@@ -858,6 +857,157 @@ void MainWindow::updateUsageTimerLabel()
         .arg(mins, 2, 10, QChar('0'))
         .arg(s, 2, 10, QChar('0'));
     m_usageTimerLabel->setText(text);
+}
+
+bool MainWindow::isCalibrationLabelIndex(int labelIndex) const
+{
+    if(labelIndex < 0 || labelIndex >= m_objList.size())
+        return false;
+
+    const QString labelName = m_objList.at(labelIndex).trimmed();
+    return labelName.compare("cal", Qt::CaseInsensitive) == 0 ||
+           labelName.startsWith("cal_", Qt::CaseInsensitive);
+}
+
+QVector<ObjectLabelingBox> MainWindow::loadLabelBoxes(const QString& labelFilePath) const
+{
+    QVector<ObjectLabelingBox> boxes;
+    ifstream inputFile(qPrintable(labelFilePath));
+    if(!inputFile.is_open())
+        return boxes;
+
+    int label = -1;
+    double midX = 0.0;
+    double midY = 0.0;
+    double width = 0.0;
+    double height = 0.0;
+
+    while(inputFile >> label >> midX >> midY >> width >> height)
+    {
+        if(label < 0 || label >= m_objList.size())
+            continue;
+
+        ObjectLabelingBox objBox;
+        objBox.label = label;
+        objBox.box = QRectF(midX - width / 2.0, midY - height / 2.0, width, height);
+        boxes.push_back(objBox);
+    }
+
+    return boxes;
+}
+
+void MainWindow::writeLabelBoxes(const QString& labelFilePath, const QVector<ObjectLabelingBox>& boxes) const
+{
+    ofstream outputFile(qPrintable(labelFilePath));
+    if(!outputFile.is_open())
+        return;
+
+    for(const ObjectLabelingBox& objBox : boxes)
+    {
+        double midX = objBox.box.x() + objBox.box.width() / 2.0;
+        double midY = objBox.box.y() + objBox.box.height() / 2.0;
+        double width = objBox.box.width();
+        double height = objBox.box.height();
+
+        outputFile << objBox.label;
+        outputFile << " ";
+        outputFile << std::fixed << std::setprecision(6) << midX;
+        outputFile << " ";
+        outputFile << std::fixed << std::setprecision(6) << midY;
+        outputFile << " ";
+        outputFile << std::fixed << std::setprecision(6) << width;
+        outputFile << " ";
+        outputFile << std::fixed << std::setprecision(6) << height << std::endl;
+    }
+}
+
+QVector<ObjectLabelingBox> MainWindow::filterCalibrationBoxes(
+    const QVector<ObjectLabelingBox>& boxes) const
+{
+    QVector<ObjectLabelingBox> filteredBoxes;
+
+    for(const ObjectLabelingBox& box : boxes)
+    {
+        if(isCalibrationLabelIndex(box.label))
+            filteredBoxes.push_back(box);
+    }
+
+    return filteredBoxes;
+}
+
+bool MainWindow::boxListsMatchForStorage(
+    const QVector<ObjectLabelingBox>& lhs,
+    const QVector<ObjectLabelingBox>& rhs) const
+{
+    if(lhs.size() != rhs.size())
+        return false;
+
+    for(int i = 0; i < lhs.size(); ++i)
+    {
+        if(lhs.at(i).label != rhs.at(i).label)
+            return false;
+
+        const QRectF& lhsBox = lhs.at(i).box;
+        const QRectF& rhsBox = rhs.at(i).box;
+
+        if(quantizeForStorage(lhsBox.x()) != quantizeForStorage(rhsBox.x()) ||
+           quantizeForStorage(lhsBox.y()) != quantizeForStorage(rhsBox.y()) ||
+           quantizeForStorage(lhsBox.width()) != quantizeForStorage(rhsBox.width()) ||
+           quantizeForStorage(lhsBox.height()) != quantizeForStorage(rhsBox.height()))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void MainWindow::syncCalibrationBoxesAcrossFolderIfNeeded()
+{
+    if(m_imgList.isEmpty() ||
+       m_imgIndex < 0 ||
+       m_imgIndex >= m_imgList.size() ||
+       !ui->label_image->isOpened())
+    {
+        return;
+    }
+
+    const QVector<ObjectLabelingBox> calibrationBoxes = filterCalibrationBoxes(
+        ui->label_image->m_objBoundingBoxes);
+
+    if(boxListsMatchForStorage(calibrationBoxes, m_savedCalibrationBoxes))
+        return;
+
+    writeLabelBoxes(get_labeling_data(m_imgList.at(m_imgIndex)), ui->label_image->m_objBoundingBoxes);
+    m_lastLabeledImgIndex = m_imgIndex;
+
+    for(int i = 0; i < m_imgList.size(); ++i)
+    {
+        if(i == m_imgIndex)
+            continue;
+
+        const QString labelPath = get_labeling_data(m_imgList.at(i));
+        const QVector<ObjectLabelingBox> existingBoxes = loadLabelBoxes(labelPath);
+
+        QVector<ObjectLabelingBox> updatedBoxes;
+        updatedBoxes.reserve(existingBoxes.size() + calibrationBoxes.size());
+
+        for(const ObjectLabelingBox& box : existingBoxes)
+        {
+            if(!isCalibrationLabelIndex(box.label))
+                updatedBoxes.push_back(box);
+        }
+
+        for(const ObjectLabelingBox& box : calibrationBoxes)
+            updatedBoxes.push_back(box);
+
+        if(boxListsMatchForStorage(updatedBoxes, existingBoxes))
+            continue;
+
+        writeLabelBoxes(labelPath, updatedBoxes);
+    }
+
+    m_savedCalibrationBoxes = calibrationBoxes;
 }
 
 void MainWindow::reset_zoom()
@@ -1086,6 +1236,7 @@ void MainWindow::applyDetections(const std::vector<DetectionResult>& detections)
     }
 
     ui->label_image->showImage();
+    syncCalibrationBoxesAcrossFolderIfNeeded();
 }
 
 float MainWindow::getConfidenceThreshold() const
@@ -1337,4 +1488,3 @@ void MainWindow::cloudAutoLabelAll()
     m_cloudLabeler->setClasses(m_objList);
     m_cloudLabeler->labelImages(m_imgList);
 }
-

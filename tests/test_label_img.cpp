@@ -225,6 +225,23 @@ private slots:
         widget.moveBox(-1, 0.1, 0.1);
         widget.moveBox(5, 0.1, 0.1);
     }
+    void moveBox_emitsAnnotationsChanged()
+    {
+        label_img widget;
+        widget.resize(640, 480);
+        widget.init();
+        widget.m_objList = {"cat"};
+
+        ObjectLabelingBox box;
+        box.label = 0;
+        box.box = QRectF(0.2, 0.2, 0.3, 0.3);
+        widget.m_objBoundingBoxes.append(box);
+
+        QSignalSpy spy(&widget, &label_img::annotationsChanged);
+
+        widget.moveBox(0, 0.1, 0.1);
+        QCOMPARE(spy.count(), 1);
+    }
 
     // ── resizeBox ────────────────────────────────────────────────
     void resizeBox_basic()
@@ -539,6 +556,23 @@ private slots:
         QCOMPARE(widget.undo(), true);
         QCOMPARE(widget.m_objBoundingBoxes.size(), 1);
     }
+    void clearAllBoxes_emitsAnnotationsChanged()
+    {
+        label_img widget;
+        widget.resize(640, 480);
+        widget.init();
+        widget.m_objList = {"cat"};
+
+        ObjectLabelingBox box;
+        box.label = 0;
+        box.box = QRectF(0.1, 0.1, 0.3, 0.3);
+        widget.m_objBoundingBoxes.append(box);
+
+        QSignalSpy spy(&widget, &label_img::annotationsChanged);
+
+        widget.clearAllBoxes();
+        QCOMPARE(spy.count(), 1);
+    }
     void clearUndoHistory_clearsBoth()
     {
         label_img widget;
@@ -641,6 +675,40 @@ private slots:
 
         widget.undo();
         QCOMPARE(widget.m_objBoundingBoxes[0].label, 0);
+    }
+    void setFocusedLabel_emitsAnnotationsChanged()
+    {
+        label_img widget;
+        widget.resize(640, 480);
+        widget.init();
+        widget.m_objList = {"cat", "dog"};
+
+        ObjectLabelingBox box;
+        box.label = 0;
+        box.box = QRectF(0.2, 0.2, 0.4, 0.4);
+        widget.m_objBoundingBoxes.append(box);
+
+        QSignalSpy spy(&widget, &label_img::annotationsChanged);
+
+        widget.setFocusedObjectBoxLabel(QPointF(0.3, 0.3), 1);
+        QCOMPARE(spy.count(), 1);
+    }
+    void setFocusedLabel_sameLabelDoesNotEmit()
+    {
+        label_img widget;
+        widget.resize(640, 480);
+        widget.init();
+        widget.m_objList = {"cat", "dog"};
+
+        ObjectLabelingBox box;
+        box.label = 0;
+        box.box = QRectF(0.2, 0.2, 0.4, 0.4);
+        widget.m_objBoundingBoxes.append(box);
+
+        QSignalSpy spy(&widget, &label_img::annotationsChanged);
+
+        widget.setFocusedObjectBoxLabel(QPointF(0.3, 0.3), 0);
+        QCOMPARE(spy.count(), 0);
     }
 
     // ── setContrastGamma ─────────────────────────────────────────
